@@ -1,0 +1,366 @@
+{
+  "name": "Uni Email to Tasks",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyHour"
+            }
+          ]
+        },
+        "simple": false,
+        "maxResults": 20,
+        "filters": {
+          "q": "-category:promotions -category:social",
+          "readStatus": "unread"
+        },
+        "options": {}
+      },
+      "id": "e0c3b457-4c99-5c5e-a2e5-3c18bd871eaa",
+      "name": "Gmail Trigger",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        0
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "",
+          "name": "Connect your gmailOAuth2 credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const e = $json;\n\n// Works with both Gmail formats: simple=false (from/subject/text/html) and simple=true (From/Subject/snippet)\nlet body = e.text || (e.html || '')\n  .replace(/<style[\\s\\S]*?<\\/style>/gi, '')\n  .replace(/<script[\\s\\S]*?<\\/script>/gi, '')\n  .replace(/<[^>]+>/g, ' ')\n  .replace(/&nbsp;/g, ' ');\nif (!body) body = e.snippet || '';\n\nbody = body\n  .replace(/[͏​-‍﻿]/g, '') // invisible characters used in newsletters\n  .replace(/\\s+/g, ' ')\n  .split(/On .+ wrote:|-----Original Message-----/)[0] // drop quoted replies\n  .trim()\n  .slice(0, 3000);\n\nreturn {\n  id: e.id,\n  threadId: e.threadId,\n  from: e.from?.value?.[0]?.address || e.from?.text || e.From || '',\n  subject: e.subject || e.Subject || '(no subject)',\n  date: e.date || (e.internalDate ? new Date(Number(e.internalDate)).toISOString() : ''),\n  link: `https://mail.google.com/mail/u/0/#all/${e.threadId || e.id}`,\n  body\n};"
+      },
+      "id": "5ae7fb6c-78a2-5014-ad8e-5a0c0d6bd236",
+      "name": "Clean Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        200,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=From: {{ $json.from }}\nSubject: {{ $json.subject }}\nReceived: {{ $json.date }}\nEmail link: {{ $json.link }}\n\nBody:\n{{ $json.body }}",
+        "options": {
+          "systemMessage": "=You are a university email assistant for a student at UCAS (University College of Applied Sciences, Gaza).\nCurrent date/time: {{ $now.setZone('Asia/Gaza').toFormat(\"cccc, yyyy-MM-dd HH:mm\") }} (timezone: Asia/Gaza, current UTC offset: {{ $now.setZone('Asia/Gaza').toFormat('ZZ') }}).\n\nRead the email and identify EVERY academic item in it. One email may contain several items — handle all of them.\n\nUnderstanding Moodle emails (\"New content added to your course\"):\n- \"Course:\" usually looks like \"<course name> - <instructor name>\". The course name is the part BEFORE \" - \" (e.g. \"برمجة للذكاء الاصطناعي\"). Keep the course name in its original language.\n- \"Added:\" is the item title (e.g. \"Chapter 2 numpy part 2 (create ndarray)\").\n- \"added a new URL / file / page / folder / resource / book / lesson\" → LECTURE material.\n- \"added a new assignment\" → ASSIGNMENT. \"added a new quiz\" → QUIZ.\n\nCategories and actions:\n1. LECTURE (new lecture / slides / recording / material / URL / file)\n   → Create a Google Task: \"📚 [Course] - [Title]\" with due date = today.\n2. ASSIGNMENT / PROJECT / HOMEWORK\n   → Create a Google Task: \"📝 [Course] - [Title]\" with due date = deadline date.\n   → Create a Calendar event: \"⏰ Deadline: [Course] - [Title]\" STARTING exactly at the deadline time, 30 minutes long.\n   → If no deadline is stated: create the task with due date = today and add a warning that the deadline must be checked on Moodle.\n3. QUIZ / EXAM / MIDTERM / FINAL\n   → Create a Calendar event: \"🧪 [Course] - [Name]\" at the exact time. Use the stated duration, otherwise 1 hour. Add location if mentioned.\n   → If no date/time is stated: do NOT create an event; add a warning.\n4. OTHER (announcements, ads, newsletters, non-academic emails) → Do nothing.\n\nRules:\n- Resolve relative dates using the current date above. Use ISO 8601 with the Asia/Gaza UTC offset valid on that date (+02:00 winter, +03:00 summer).\n- NEVER guess dates or times.\n- Before creating anything, search existing tasks/events. If the same item already exists, do not create it; list it under duplicates.\n- If a deadline/exam is already in the past, do not create it; add a warning.\n- Put a short summary, the sender and the email link in the task notes / event description.\n\nFINAL ANSWER: return ONLY a JSON object (no markdown, no code fences, no extra text) with exactly this shape:\n{\n  \"subject\": \"email subject\",\n  \"category\": \"lecture\" | \"assignment\" | \"quiz\" | \"exam\" | \"mixed\" | \"other\",\n  \"course\": \"course name or empty string\",\n  \"added_tasks\": [ { \"title\": \"exact task title you created\", \"due\": \"YYYY-MM-DD or empty\" } ],\n  \"added_events\": [ { \"title\": \"exact event title you created\", \"start\": \"ISO 8601 start\", \"location\": \"location or empty\" } ],\n  \"duplicates\": [ \"title of item that already existed\" ],\n  \"warnings\": [ \"short warning in Arabic (Palestinian dialect)\" ]\n}\nOnly list items you actually created with the tools. Use empty arrays when nothing applies.",
+          "batching": {
+            "batchSize": 1,
+            "delayBetweenBatches": 45000
+          }
+        }
+      },
+      "id": "a1d040a9-c306-5cb3-8cb8-dd97442f4078",
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        480,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "985559cc-b499-5d4d-a3bf-e0b25bf7e7cc",
+      "name": "Gemini",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        220
+      ],
+      "credentials": {
+        "googlePalmApi": {
+          "id": "",
+          "name": "Connect your googlePalmApi credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "List existing Google Tasks (including completed) to check whether a task with the same title already exists before creating a new one.",
+        "operation": "getAll",
+        "task": "YOUR_GOOGLE_TASKLIST_ID",
+        "returnAll": true,
+        "additionalFields": {
+          "showCompleted": true,
+          "showHidden": true
+        }
+      },
+      "id": "0c0fe7e1-8955-5834-ac55-df5b563005ea",
+      "name": "get_tasks",
+      "type": "n8n-nodes-base.googleTasksTool",
+      "typeVersion": 1,
+      "position": [
+        340,
+        220
+      ],
+      "credentials": {
+        "googleTasksOAuth2Api": {
+          "id": "",
+          "name": "Connect your googleTasksOAuth2Api credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Create a new Google Task (for lectures and assignments). Always search existing tasks first to avoid duplicates.",
+        "task": "YOUR_GOOGLE_TASKLIST_ID",
+        "title": "={{ $fromAI('title', 'Task title, e.g. \"📝 Data Structures - Assignment 3\" or \"📚 Databases - Lecture 5\"', 'string') }}",
+        "additionalFields": {
+          "dueDate": "={{ $fromAI('dueDate', 'Due date in RFC 3339 format, e.g. 2026-11-15T00:00:00.000Z. For assignments use the deadline date; for lectures use today\\'s date.', 'string') }}",
+          "notes": "={{ $fromAI('notes', 'Short summary of the email, the sender, and the email link', 'string') }}"
+        }
+      },
+      "id": "66021462-198a-55d2-8ce5-761dbc7744e1",
+      "name": "create_task",
+      "type": "n8n-nodes-base.googleTasksTool",
+      "typeVersion": 1,
+      "position": [
+        480,
+        220
+      ],
+      "credentials": {
+        "googleTasksOAuth2Api": {
+          "id": "",
+          "name": "Connect your googleTasksOAuth2Api credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Search existing calendar events in a time range to check for duplicates before creating a new event.",
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "YOUR_CALENDAR_ID",
+          "mode": "id"
+        },
+        "returnAll": true,
+        "timeMin": "={{ $fromAI('timeMin', 'Search window start in ISO 8601, e.g. the event day at 00:00', 'string') }}",
+        "timeMax": "={{ $fromAI('timeMax', 'Search window end in ISO 8601, e.g. the event day at 23:59', 'string') }}",
+        "options": {}
+      },
+      "id": "7d50a475-44ac-5dbb-bd31-107791295aa6",
+      "name": "get_events",
+      "type": "n8n-nodes-base.googleCalendarTool",
+      "typeVersion": 1.3,
+      "position": [
+        620,
+        220
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "",
+          "name": "Connect your googleCalendarOAuth2Api credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Create a Google Calendar event for an assignment deadline, quiz or exam. Always search existing events first to avoid duplicates.",
+        "calendar": {
+          "__rl": true,
+          "value": "YOUR_CALENDAR_ID",
+          "mode": "id"
+        },
+        "start": "={{ $fromAI('start', 'Event start in ISO 8601 with Asia/Gaza offset, e.g. 2026-11-15T10:00:00+02:00', 'string') }}",
+        "end": "={{ $fromAI('end', 'Event end in ISO 8601 with Asia/Gaza offset, e.g. 2026-11-15T11:00:00+02:00', 'string') }}",
+        "useDefaultReminders": false,
+        "additionalFields": {
+          "description": "={{ $fromAI('description', 'Short summary of the email, the sender, and the email link', 'string') }}",
+          "location": "={{ $fromAI('location', 'Location if mentioned, otherwise empty string', 'string') }}",
+          "summary": "={{ $fromAI('summary', 'Event title, e.g. \"🧪 Databases - Quiz 2\" or \"⏰ Deadline: OS - Assignment 1\"', 'string') }}"
+        },
+        "remindersUi": {
+          "remindersValues": [
+            {
+              "method": "popup",
+              "minutes": 1440
+            },
+            {
+              "method": "popup",
+              "minutes": 60
+            }
+          ]
+        }
+      },
+      "id": "fa006b43-17c7-52b2-9c6e-4f2f7a4bdbc4",
+      "name": "create_event",
+      "type": "n8n-nodes-base.googleCalendarTool",
+      "typeVersion": 1.3,
+      "position": [
+        760,
+        220
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "",
+          "name": "Connect your googleCalendarOAuth2Api credential"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const TZ = 'Asia/Gaza';\nconst R = '‏'; // right-to-left mark, so lines that mix Arabic and English still align right\nconst esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nconst DAYS = ['الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت', 'الأحد'];\n\nconst fmtDate = (iso, withTime) => {\n  if (!iso) return '';\n  const d = DateTime.fromISO(iso, { zone: TZ });\n  if (!d.isValid) return esc(iso);\n  const today = DateTime.now().setZone(TZ).startOf('day');\n  const diff = Math.round(d.startOf('day').diff(today, 'days').days);\n  const rel = diff === 0 ? 'اليوم' : diff === 1 ? 'بكرة' : `${DAYS[d.weekday - 1]} ${d.toFormat('d/M')}`;\n  return withTime ? `${rel} · ${d.toFormat('HH:mm')}` : rel;\n};\n\n// \"📝 Course - Title\" → { icon, course, title }\nconst split = full => {\n  const s = String(full || '').trim();\n  const m = s.match(/^(\\p{Extended_Pictographic}️?)\\s*(.*)$/u);\n  const icon = m ? m[1] : '•';\n  let rest = (m ? m[2] : s).replace(/^Deadline:\\s*/i, '');\n  const i = rest.indexOf(' - ');\n  return i > 0\n    ? { icon, course: rest.slice(0, i).trim(), title: rest.slice(i + 3).trim() }\n    : { icon, course: '', title: rest };\n};\n\nconst parse = raw => {\n  try {\n    const c = String(raw).replace(/```json|```/g, '').trim();\n    return JSON.parse(c.slice(c.indexOf('{'), c.lastIndexOf('}') + 1));\n  } catch (e) { return null; }\n};\n\nconst countText = n => n === 1 ? 'إيميل واحد جديد' : n === 2 ? 'إيميلين جداد' : n <= 10 ? `${n} إيميلات جديدة` : `${n} إيميل جديد`;\n\nconst emails = $('Clean Email').all();\nconst tasks = [], events = [], dups = [], warns = [], ignored = [], unparsed = [];\n\n$input.all().forEach((item, idx) => {\n  const link = emails[idx]?.json?.link;\n  const open = link ? ` <a href=\"${link}\">↗️</a>` : '';\n  const r = parse(item.json.output);\n  if (!r) { unparsed.push(`${R}${esc(item.json.output)}`); return; }\n\n  for (const t of r.added_tasks || []) {\n    const p = split(t.title);\n    const meta = [p.course && `📘 ${esc(p.course)}`, t.due && `⏳ ${fmtDate(t.due)}`].filter(Boolean).join('  ·  ');\n    tasks.push(`${R}☐ ${p.icon} <b>${esc(p.title)}</b>${open}${meta ? `\\n${R}      ${meta}` : ''}`);\n  }\n  for (const ev of r.added_events || []) {\n    const p = split(ev.title);\n    const label = /deadline/i.test(ev.title) ? 'تسليم: ' : '';\n    const meta = [`🕒 ${fmtDate(ev.start, true)}`, ev.location && `📍 ${esc(ev.location)}`, p.course && `📘 ${esc(p.course)}`].filter(Boolean).join('  ·  ');\n    events.push(`${R}${p.icon} <b>${label}${esc(p.title)}</b>${open}\\n${R}      ${meta}`);\n  }\n  for (const d of r.duplicates || []) {\n    const p = split(d);\n    dups.push(`${R}${p.icon} ${esc(p.title)}${p.course ? ` <i>(${esc(p.course)})</i>` : ''}`);\n  }\n  for (const w of r.warnings || []) warns.push(`${R}❗ ${esc(w)}${open}`);\n\n  const did = (r.added_tasks || []).length + (r.added_events || []).length + (r.duplicates || []).length + (r.warnings || []).length;\n  if (!did) ignored.push(`${R}▫️ ${esc(r.subject)}`);\n});\n\nconst now = DateTime.now().setZone(TZ);\nconst header = `${R}🎓 <b>تقرير الجامعة</b>\\n${R}🗓 ${DAYS[now.weekday - 1]} ${now.toFormat('d/M')} · ${now.toFormat('HH:mm')}  |  📬 ${countText($input.all().length)}`;\n\nconst parts = [header];\nif (tasks.length)  parts.push(`${R}✅ <b>مهام جديدة (${tasks.length})</b>\\n\\n${tasks.join('\\n\\n')}`);\nif (events.length) parts.push(`${R}📅 <b>مواعيد انضافت للكلندر (${events.length})</b>\\n\\n${events.join('\\n\\n')}`);\nif (warns.length)  parts.push(`${R}⚠️ <b>بدها انتباهك</b>\\n\\n${warns.join('\\n')}`);\nif (dups.length)   parts.push(`${R}🔁 <b>موجودة من قبل (ما كررتها)</b>\\n${dups.join('\\n')}`);\nif (ignored.length) parts.push(`${R}📭 <b>إيميلات مش دراسية (${ignored.length})</b>\\n${ignored.join('\\n')}`);\nif (unparsed.length) parts.push(`${R}❓ <b>ما قدرت أنسقهم</b>\\n${unparsed.join('\\n\\n')}`);\nif (!tasks.length && !events.length && !warns.length) parts.push(`${R}✨ ما في شي جديد بده شغل — ارتاحي 😌`);\n\nreturn [{ json: { text: parts.join('\\n\\n────────────\\n\\n') } }];\n"
+      },
+      "id": "88034068-2995-5f2f-9891-755eddc39700",
+      "name": "Build Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        760,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false,
+          "disable_web_page_preview": true,
+          "parse_mode": "HTML"
+        }
+      },
+      "id": "38f06f91-b730-58fe-8ee4-283bc4b1a22f",
+      "name": "Send Report",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        960,
+        0
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "",
+          "name": "Connect your telegramApi credential"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Gmail Trigger": {
+      "main": [
+        [
+          {
+            "node": "Clean Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clean Email": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Build Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Report": {
+      "main": [
+        [
+          {
+            "node": "Send Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "get_tasks": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "create_task": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "get_events": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "create_event": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Gaza"
+  },
+  "pinData": {}
+}
